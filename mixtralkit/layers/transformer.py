@@ -12,7 +12,7 @@ from .attention import TorchAttention, FairScaleAttention
 from .ffn import TorchFFN, FairScaleFFN
 from .norm import RMSNorm
 from .position_embeding import precompute_freqs_cis
-
+import pdb
 
 class TorchTransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: ModelArgs):
@@ -67,9 +67,11 @@ class TorchTransformerBlock(nn.Module):
             torch.Tensor: Output tensor after applying attention and feedforward layers.
 
         """
+
         h = x + self.attention.forward(
             self.attention_norm(x), start_pos, freqs_cis, mask
         )
+
         out = h + self.feed_forward.forward(self.ffn_norm(h))
         return out
 
@@ -141,7 +143,6 @@ class TorchTransformer(nn.Module):
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
             self.layers.append(TorchTransformerBlock(layer_id, params))
-
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = nn.Linear(
             params.dim, params.vocab_size, bias=False
@@ -188,7 +189,7 @@ class TorchTransformer(nn.Module):
                 torch.zeros((seqlen, start_pos), device=tokens.device),
                 mask
             ]).type_as(h)
-
+        # print("h:",h.shape)
         for layer in self.layers:
             h = layer(h, start_pos, freqs_cis, mask)
         h = self.norm(h)

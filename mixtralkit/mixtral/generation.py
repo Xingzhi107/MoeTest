@@ -11,7 +11,8 @@ from typing import List, Optional, Tuple, TypedDict
 
 import torch
 import torch.nn.functional as F
-
+import torchvision.models as models
+from torch.profiler import profile, record_function, ProfilerActivity
 from mixtralkit.layers import (
     Tokenizer,
     MoETorchTransformer,
@@ -25,7 +26,8 @@ from mixtralkit.utils.generation import (
 
 )
 from fmoe.distributed import DistributedGroupedDataParallel as DDP
-
+import torch.distributed as dist
+import pdb
 B_INST, E_INST = "[INST]", "[/INST]"
 B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
 
@@ -43,6 +45,7 @@ class Mixtral:
         num_gpus: int,
         model_parallel_size: Optional[int] = None,
         seed: int = 1,
+        world_size = 1,
     ) -> "Mixtral":
         """
         Build a Llama instance by initializing and loading a pre-trained model.
@@ -73,36 +76,37 @@ class Mixtral:
         torch.manual_seed(seed)
 
         start_time = time.time()
-        # checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-        # assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-        # assert model_parallel_size == len(
-        #     checkpoints
-        # ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-        # ckpt_path = checkpoints[0]
+        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+        assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+        assert model_parallel_size == len(
+            checkpoints
+        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
+        ckpt_path = checkpoints[0]
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 
         model_args: MixtralModelArgs = MixtralModelArgs(
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
-            num_gpus=num_gpus,
             **params,
+            world_size = world_size,
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
         torch.set_default_tensor_type(torch.cuda.HalfTensor)
+        # rank = dist.get_rank() 
         model = MoETorchTransformer(model_args)
-        model = DDP(model)
+        # model = DDP(model)
         print(f"=== created Mixtral 8x7B. Experts spread over {num_gpus} GPUs ===")
         model_param_keys = []
         for key, value in model.named_parameters():
-            model_param_keys.append(key)
+           model_param_keys.append(key)
 
-        # checkpoint = torch.load(ckpt_path, map_location="cpu")
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
         print("Total number of model parameters:{}".format(len(model_param_keys)))
-        # print("Total number of checkpoint parameters:{}".format(len(checkpoint)))
+        print("Total number of checkpoint parameters:{}".format(len(checkpoint)))
 
-        # model.load_state_dict(checkpoint, strict=False)
+        model.load_state_dict(checkpoint, strict=False)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
         return Mixtral(model, tokenizer)
@@ -141,21 +145,26 @@ class Mixtral:
 
         """
         params = self.model.params
+        prompt_tokens = prompt_tokens*8
         bsz = len(prompt_tokens)
-        assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
+        # bsz = 8
+        # assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
 
         min_prompt_len = min(len(t) for t in prompt_tokens)
         max_prompt_len = max(len(t) for t in prompt_tokens)
         assert max_prompt_len <= params.max_seq_len
         total_len = min(params.max_seq_len, max_gen_len + max_prompt_len)
-
         pad_id = self.tokenizer.pad_id
         tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
         for k, t in enumerate(prompt_tokens):
             tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
         if logprobs:
             token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
-
+        #rank = dist.get_rank()
+        self.model.cuda()
+        # print(tokens)
+       # print(rank)
+        self.model = DDP(self.model)
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
         input_text_mask = tokens != pad_id
@@ -167,8 +176,8 @@ class Mixtral:
                 reduction="none",
                 ignore_index=pad_id,
             )
-
         for cur_pos in range(min_prompt_len, total_len):
+        #第一个就是【3，5，1024】【3，1，1024】
             logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
@@ -195,7 +204,8 @@ class Mixtral:
             prev_pos = cur_pos
             if all(eos_reached):
                 break
-
+            # self.model.allreduce_params()
+        
         if logprobs:
             token_logprobs = token_logprobs.tolist()
         out_tokens, out_logprobs = [], []
@@ -247,6 +257,16 @@ class Mixtral:
         if max_gen_len is None:
             max_gen_len = self.model.params.max_seq_len - 1
         prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False) for x in prompts]
+        tensor_size = int(os.environ['WORLD_SIZE'])
+        output_tensor = [None]
+        # print(prompt_tokens)
+        #if dist.get_rank() == 0:
+        #    scatter_list = prompt_tokens
+        #else:
+        #    scatter_list = [None]*tensor_size
+        # print(scatter_list)
+        #dist.scatter_object_list(output_tensor, scatter_list, src=0)
+        #print(output_tensor)
         generation_tokens, generation_logprobs = self.generate(
             prompt_tokens=prompt_tokens,
             max_gen_len=max_gen_len,

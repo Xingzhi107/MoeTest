@@ -101,6 +101,7 @@ class TorchAttention(nn.Module):
             torch.Tensor: Output tensor after attention.
 
         """
+        # print(x.shape)
         bsz, seqlen, _ = x.shape
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
@@ -133,8 +134,6 @@ class TorchAttention(nn.Module):
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
-
-
 class FairScaleAttention(TorchAttention):
     """Multi-head attention module.
     

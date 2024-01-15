@@ -36,6 +36,7 @@ class MixtralModelArgs:
 
     moe: Optional[Dict[str, int]] = None
     num_gpus: int = 1
+    world_size:int =1
     rope_theta: int = 1e6
 
 
