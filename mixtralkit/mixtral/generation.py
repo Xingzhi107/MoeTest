@@ -165,6 +165,43 @@ class Mixtral:
         # print(tokens)
        # print(rank)
         self.model = DDP(self.model)
+        dist.barrier()
+        modules = list(self.model.module.modules())
+        print(modules[0])
+        #print(list(modules[0].layers))
+        layers = modules[0].layers
+        for i in layers:
+            expert_params = torch.nn.utils.parameters_to_vector(i.feed_forward.experts.parameters())
+            # 移动到CUDA设备上，并且数据类型为半精度数
+            expert_params = expert_params.to(device="cuda", dtype=torch.half)
+            # 获取进程组的大小
+            world_size = torch.distributed.get_world_size()
+            # 创建一个空列表，用于存放输出张量
+            gather_list = []
+            # 如果是进程0，创建world_size个与输入张量相同形状和类型的零张量
+            if torch.distributed.get_rank() == 0:
+                for _ in range(world_size):
+                    gather_list.append(torch.zeros_like(expert_params))
+            # 调用gather函数，将输入张量收集到进程0中
+            torch.distributed.gather(expert_params, gather_list=gather_list, dst=0)
+            if dist.get_rank()==0:
+                print("专家数量：",len(gather_list))
+                for k in range(0,len(gather_list)-1):
+                    # model1 = self.experts[i].cpu()
+                    # model2 = self.experts[i+1].cpu()
+                    # print(model1)
+                    print("计算模型{}的flatten".format(k))
+                    # params1 = torch.nn.utils.parameters_to_vector(model1.parameters())
+                    params1 = gather_list[k]
+                    print(params1)
+                    print("模型{}的参数量是：".format(k),params1.shape)
+                    print("计算模型{}的flatten".format(k+1))
+                    params2 = gather_list[k+1]
+                    print(params2)
+                    # print("开始计算模型1和2的相似度")
+                    # tmp_ij = torch.sum(params1 * params2) / (torch.norm(params1) * torch.norm(params2) + 1e-12)
+                    tmp_ij = similarity = torch.dot(params1, params2) / (torch.norm(params1) * torch.norm(params2))
+                    print("模型{}和{}的相似度是:".format(k,k+1),tmp_ij)
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
         input_text_mask = tokens != pad_id
