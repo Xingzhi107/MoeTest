@@ -24,6 +24,7 @@ from mixtralkit.utils.generation import (
     ChatPrediction
 
 )
+from fmoe.distributed import DistributedGroupedDataParallel as DDP
 
 B_INST, E_INST = "[INST]", "[/INST]"
 B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
@@ -72,12 +73,12 @@ class Mixtral:
         torch.manual_seed(seed)
 
         start_time = time.time()
-        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-        assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-        assert model_parallel_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-        ckpt_path = checkpoints[0]
+        # checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+        # assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+        # assert model_parallel_size == len(
+        #     checkpoints
+        # ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
+        # ckpt_path = checkpoints[0]
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 
@@ -91,16 +92,17 @@ class Mixtral:
         model_args.vocab_size = tokenizer.n_words
         torch.set_default_tensor_type(torch.cuda.HalfTensor)
         model = MoETorchTransformer(model_args)
+        model = DDP(model)
         print(f"=== created Mixtral 8x7B. Experts spread over {num_gpus} GPUs ===")
         model_param_keys = []
         for key, value in model.named_parameters():
             model_param_keys.append(key)
 
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        # checkpoint = torch.load(ckpt_path, map_location="cpu")
         print("Total number of model parameters:{}".format(len(model_param_keys)))
-        print("Total number of checkpoint parameters:{}".format(len(checkpoint)))
+        # print("Total number of checkpoint parameters:{}".format(len(checkpoint)))
 
-        model.load_state_dict(checkpoint, strict=False)
+        # model.load_state_dict(checkpoint, strict=False)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
         return Mixtral(model, tokenizer)

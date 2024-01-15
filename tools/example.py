@@ -2,7 +2,7 @@
 
 import argparse
 from mixtralkit.mixtral import Mixtral
-
+import torch.distributed as dist
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Run an inference of mixtral-8x7b model')
@@ -16,14 +16,18 @@ def parse_args():
                         help='path of tokenizer file.',
                         default=None,
                         type=str)
-    parser.add_argument('--num-gpus', type=int)
-
+    # parser.add_argument('--num-gpus', type=int)
+    parser.add_argument("--world_size", type=int)
+    parser.add_argument("--node_rank", type=int)
+    parser.add_argument("--master_addr", default="127.0.0.1", type=str)
+    parser.add_argument("--master_port", default="12355", type=str)
     args = parser.parse_args()
     return args
 
 
 def main():
     args = parse_args()
+    dist.init_process_group("nccl", init_method='env://')    # init_method方式修改
     max_batch_size = 4
     max_seq_len = 1024
     max_gen_len = 64
